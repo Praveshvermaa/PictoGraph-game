@@ -661,6 +661,7 @@ function checkAnswer(btn, selected, question) {
 
         // Show educational insight below answer options
         showAnswerInsight(question);
+        scrollToWrongAnswerFeedback();
 
         // Animate counting on pictograph
         if (question.explainClass || question.comparisonClasses || question.differenceClasses || question.allClasses) {
@@ -1480,7 +1481,24 @@ function showAnswerInsight(question) {
     if (insight) {
         insightEl.innerHTML = insight;
         insightEl.className = 'answer-insight show';
+    }
+}
+
+function scrollToWrongAnswerFeedback() {
+    const questionCard = $('question-card');
+    const insightEl = $('answer-insight');
+    const feedbackEl = $('question-feedback');
+
+    if (questionCard) {
+        questionCard.scrollTo({ top: questionCard.scrollHeight, behavior: 'smooth' });
+    }
+
+    if (insightEl) {
         insightEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    if (feedbackEl) {
+        feedbackEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 }
 
