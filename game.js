@@ -24,6 +24,8 @@ const STATE = {
     levelScore: 0,
     levelMistakes: 0,
     answered: false,
+    levelCompleteTimer: null,
+    levelStars: {},
 };
 
 // ─── LEVEL CONFIG ───────────────────────────────────────────────────────────
@@ -104,6 +106,7 @@ function goHome() {
     sfxClick();
     hide('game-screen');
     hide('level-complete-modal');
+    hide('final-stats-modal');
     show('splash-screen');
 }
 
@@ -118,6 +121,8 @@ function resetGame() {
     STATE.correctStreak = 0;
     STATE.badges = { golden: false, solver: false, mean: false };
     STATE.weakTopics = {};
+    STATE.levelStars = {};
+    hide('final-stats-modal');
     loadLevel(1);
 }
 
@@ -170,6 +175,11 @@ function updateTeacherStats() {
 
 // ─── LEVEL LOADING ──────────────────────────────────────────────────────────
 function loadLevel(levelNum) {
+    if (STATE.levelCompleteTimer) {
+        clearTimeout(STATE.levelCompleteTimer);
+        STATE.levelCompleteTimer = null;
+    }
+
     const lvl = LEVELS[(levelNum - 1) % LEVELS.length];
     STATE.currentLevel = levelNum;
     STATE.phase = 'build';
@@ -195,6 +205,7 @@ function loadLevel(levelNum) {
     // Reset panels
     $('build-panel').classList.remove('hidden-panel');
     $('question-panel').classList.add('hidden-panel');
+    $('question-panel').classList.remove('active-panel');
     $('btn-validate').disabled = false;
     $('btn-validate').classList.remove('success');
     $('btn-validate').textContent = '✅ Check My Pictograph';
@@ -204,6 +215,7 @@ function loadLevel(levelNum) {
     hide('level-complete-modal');
 
     resetHelper();
+    resetQuestionPanel();
 
     // Hint
     if (lvl.halfFootball) {
@@ -211,6 +223,17 @@ function loadLevel(levelNum) {
     } else {
         $('build-hint').textContent = 'Each ⚽ = 10 students';
     }
+}
+
+function resetQuestionPanel() {
+    $('question-progress').textContent = 'Question 1 / 5';
+    $('question-number').textContent = 'Q1';
+    $('question-text').textContent = 'Build your pictograph and click Check My Pictograph.';
+    $('answer-options').innerHTML = '';
+    $('question-feedback').textContent = '';
+    $('question-feedback').className = 'question-feedback';
+    $('answer-insight').textContent = '';
+    $('answer-insight').className = 'answer-insight hide';
 }
 
 function buildPictographColumns(lvl) {
@@ -223,6 +246,7 @@ function buildPictographColumns(lvl) {
         col.innerHTML = `
             <div class="picto-label">Class ${cls}</div>
             <div class="picto-target">${count} students</div>
+            <div class="picto-inline-feedback" id="inline-feedback-${cls}"></div>
             <div class="picto-stack" id="stack-${cls}" data-class="${cls}"></div>
             <div class="picto-buttons">
                 <button class="btn-picto btn-add" onclick="addFootball(${cls})" title="Add Football">+ ⚽</button>
@@ -269,6 +293,7 @@ function renderStack(cls) {
     const lvl = LEVELS[(STATE.currentLevel - 1) % LEVELS.length];
     stack.innerHTML = '';
     stack.classList.remove('correct', 'wrong');
+    clearInlineClassFeedback(cls);
 
     for (let i = 0; i < count; i++) {
         const ball = document.createElement('span');
@@ -290,6 +315,21 @@ function renderStack(cls) {
     }
 }
 
+function setInlineClassFeedback(cls, message, type = 'neutral') {
+    const feedbackEl = $(`inline-feedback-${cls}`);
+    if (!feedbackEl) return;
+
+    feedbackEl.textContent = message || '';
+    feedbackEl.className = 'picto-inline-feedback';
+    if (message) {
+        feedbackEl.classList.add('show', type);
+    }
+}
+
+function clearInlineClassFeedback(cls) {
+    setInlineClassFeedback(cls, '');
+}
+
 // ─── VALIDATE PICTOGRAPH ────────────────────────────────────────────────────
 function validatePictograph() {
     if (STATE.phase !== 'build') return;
@@ -304,10 +344,27 @@ function validatePictograph() {
         if (actual === expected) {
             stack.classList.add('correct');
             stack.classList.remove('wrong');
+            clearInlineClassFeedback(cls);
         } else {
             stack.classList.add('wrong');
             stack.classList.remove('correct');
             allCorrect = false;
+
+            const diff = Math.abs(expected - actual);
+            const footballWord = diff === 1 ? 'football' : 'footballs';
+            if (actual < expected) {
+                setInlineClassFeedback(
+                    cls,
+                    `${diff} more ${footballWord} needed. Add ${diff}.`,
+                    'need-more'
+                );
+            } else {
+                setInlineClassFeedback(
+                    cls,
+                    `${diff} extra ${footballWord} added. Remove ${diff}.`,
+                    'too-many'
+                );
+            }
         }
     });
 
@@ -490,6 +547,8 @@ function showQuestion(index) {
     $('question-text').textContent = q.text;
     $('question-feedback').textContent = '';
     $('question-feedback').className = 'question-feedback';
+    $('answer-insight').textContent = '';
+    $('answer-insight').className = 'answer-insight hide';
 
     const optionsDiv = $('answer-options');
     optionsDiv.innerHTML = '';
@@ -575,7 +634,10 @@ function checkAnswer(btn, selected, question) {
             show('btn-next');
         } else {
             show('btn-next-level');
-            setTimeout(() => showLevelComplete(), 800);
+            STATE.levelCompleteTimer = setTimeout(() => {
+                showLevelComplete();
+                STATE.levelCompleteTimer = null;
+            }, 800);
         }
 
     } else {
@@ -594,16 +656,16 @@ function checkAnswer(btn, selected, question) {
             if (b.textContent === question.answer) b.classList.add('correct-answer');
         });
 
-        $('question-feedback').textContent = `❌ Not quite! The correct answer is ${question.answer}`;
-        $('question-feedback').className = 'question-feedback wrong-feedback';
+        $('question-feedback').textContent = '';
+        $('question-feedback').className = 'question-feedback';
+
+        // Show educational insight below answer options
+        showAnswerInsight(question);
 
         // Animate counting on pictograph
         if (question.explainClass || question.comparisonClasses || question.differenceClasses || question.allClasses) {
             animateCountingOnPictograph(question);
         }
-
-        // Show visual explanation in helper panel
-        showVisualExplanation(question);
 
         show('btn-retry');
         if (STATE.currentQuestionIndex < STATE.questions.length - 1) {
@@ -747,9 +809,9 @@ function animateCountingOnPictograph(question) {
             // Remove the counting active class after animation completes
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, delayMs + (index * 1200)); // 1.2 seconds between each football
+        }, delayMs + (index * 150)); // 150ms between each football
     });
     
     // After all footballs are counted, show the calculation
@@ -774,7 +836,7 @@ function animateCountingOnPictograph(question) {
             if (calcDisplay) calcDisplay.remove();
         }, 2000);
         
-    }, delayMs + (ballCount * 1200) + 500);
+    }, delayMs + (ballCount * 150) + 100);
 }
 
 // ─── ANIMATE COMPARISON (TWO CLASSES) ──────────────────────────────────────
@@ -814,13 +876,13 @@ function animateComparison(classes) {
             
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, delayMs + (index * 1200));
+        }, delayMs + (index * 150));
     });
     
     // Show calculation for class 1
-    const calcTime1 = delayMs + (ballCount1 * 1200) + 500;
+    const calcTime1 = delayMs + (ballCount1 * 150) + 100;
     setTimeout(() => {
         const label = stack1.querySelector('.counting-label-overlay');
         if (label) label.remove();
@@ -835,7 +897,7 @@ function animateComparison(classes) {
     }, calcTime1);
     
     // ─── Animate Class 2 (after Class 1) ───
-    const startSecondClass = calcTime1 + 1500; // Wait after first class
+    const startSecondClass = calcTime1 + 300; // Wait after first class
     
     stack2.classList.add('counting-mode');
     const footballs2 = Array.from(stack2.querySelectorAll('.football-icon'));
@@ -857,13 +919,13 @@ function animateComparison(classes) {
             
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, startSecondClass + (index * 1200));
+        }, startSecondClass + (index * 150));
     });
     
     // Show calculation for class 2
-    const calcTime2 = startSecondClass + (ballCount2 * 1200) + 500;
+    const calcTime2 = startSecondClass + (ballCount2 * 150) + 100;
     setTimeout(() => {
         const label = stack2.querySelector('.counting-label-overlay');
         if (label) label.remove();
@@ -877,118 +939,17 @@ function animateComparison(classes) {
         playTone(784, 0.3, 'sine', 0.14);
     }, calcTime2);
     
-    // ─── Show Comparison Result ───
+    // ─── Clean up after animation ───
     const comparisonTime = calcTime2 + 1500;
     setTimeout(() => {
-        const moreClass = count1 > count2 ? c1 : count2 > count1 ? c2 : null;
+        stack1.classList.remove('counting-mode');
+        stack2.classList.remove('counting-mode');
         
-        const comparison = document.createElement('div');
-        comparison.className = 'comparison-overlay';
-        comparison.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
-            border: 4px solid var(--star-gold);
-            border-radius: 20px;
-            padding: 40px 45px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.4), inset 0 0 30px rgba(255,193,7,0.1);
-            animation: popIn 0.5s ease-out;
-            max-width: 500px;
-            min-width: 420px;
-        `;
-        
-        if (moreClass) {
-            const isMC1 = moreClass === c1;
-            comparison.innerHTML = `
-                <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--star-gold);">
-                    🏆 COMPARISON RESULT 🏆
-                </div>
-                <div style="height: 2px; background: linear-gradient(90deg, transparent, var(--star-gold), transparent); margin-bottom: 25px;"></div>
-                
-                <div style="display: flex; justify-content: space-around; margin-bottom: 28px; gap: 15px;">
-                    <div style="flex: 1; padding: 20px 16px; background: rgba(255,255,255,0.08); border-radius: 14px; border: 2px solid ${isMC1 ? 'var(--star-gold)' : 'rgba(255,255,255,0.2)'};${isMC1 ? 'box-shadow: 0 0 20px rgba(255,193,7,0.3);' : ''}">
-                        <div style="font-size: 24px; color: #fff; font-weight: 700; margin-bottom: 8px;">Class ${c1}</div>
-                        <div style="font-size: 32px; font-weight: 700; color: ${isMC1 ? 'var(--star-gold)' : '#fff'};">${count1}</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 6px;">students</div>
-                        ${isMC1 ? '<div style="font-size: 18px; margin-top: 10px; color: var(--star-gold); font-weight: 700;">👑 WINNER</div>' : ''}
-                    </div>
-                    
-                    <div style="display: flex; align-items: center; justify-content: center;">
-                        <div style="font-size: 28px; color: var(--star-gold); font-weight: 700;">VS</div>
-                    </div>
-                    
-                    <div style="flex: 1; padding: 20px 16px; background: rgba(255,255,255,0.08); border-radius: 14px; border: 2px solid ${!isMC1 && moreClass === c2 ? 'var(--star-gold)' : 'rgba(255,255,255,0.2)'};${!isMC1 && moreClass === c2 ? 'box-shadow: 0 0 20px rgba(255,193,7,0.3);' : ''}">
-                        <div style="font-size: 24px; color: #fff; font-weight: 700; margin-bottom: 8px;">Class ${c2}</div>
-                        <div style="font-size: 32px; font-weight: 700; color: ${!isMC1 && moreClass === c2 ? 'var(--star-gold)' : '#fff'};">${count2}</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 6px;">students</div>
-                        ${!isMC1 && moreClass === c2 ? '<div style="font-size: 18px; margin-top: 10px; color: var(--star-gold); font-weight: 700;">👑 WINNER</div>' : ''}
-                    </div>
-                </div>
-                
-                <div style="height: 2px; background: linear-gradient(90deg, transparent, var(--star-gold), transparent); margin-bottom: 20px;"></div>
-                
-                <div style="font-size: 22px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success); animation: pulse 1s infinite;">
-                    ✅ Class ${moreClass} has MORE students!
-                </div>
-            `;
-        } else {
-            comparison.innerHTML = `
-                <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--star-gold);">
-                    🤝 EQUAL COMPARISON 🤝
-                </div>
-                <div style="height: 2px; background: linear-gradient(90deg, transparent, var(--star-gold), transparent); margin-bottom: 25px;"></div>
-                
-                <div style="display: flex; justify-content: space-around; margin-bottom: 28px; gap: 15px;">
-                    <div style="flex: 1; padding: 20px 16px; background: rgba(255,255,255,0.08); border-radius: 14px; border: 2px solid var(--star-gold); box-shadow: 0 0 20px rgba(255,193,7,0.3);">
-                        <div style="font-size: 24px; color: #fff; font-weight: 700; margin-bottom: 8px;">Class ${c1}</div>
-                        <div style="font-size: 32px; font-weight: 700; color: var(--star-gold);">${count1}</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 6px;">students</div>
-                    </div>
-                    
-                    <div style="display: flex; align-items: center; justify-content: center;">
-                        <div style="font-size: 28px; color: var(--success); font-weight: 700;">=</div>
-                    </div>
-                    
-                    <div style="flex: 1; padding: 20px 16px; background: rgba(255,255,255,0.08); border-radius: 14px; border: 2px solid var(--star-gold); box-shadow: 0 0 20px rgba(255,193,7,0.3);">
-                        <div style="font-size: 24px; color: #fff; font-weight: 700; margin-bottom: 8px;">Class ${c2}</div>
-                        <div style="font-size: 32px; font-weight: 700; color: var(--star-gold);">${count1}</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 6px;">students</div>
-                    </div>
-                </div>
-                
-                <div style="height: 2px; background: linear-gradient(90deg, transparent, var(--star-gold), transparent); margin-bottom: 20px;"></div>
-                
-                <div style="font-size: 20px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success);">
-                    Both classes have the SAME number of students!
-                </div>
-            `;
-        }
-        
-        document.body.appendChild(comparison);
-        playTone(880, 0.4, 'sine', 0.15); // Success beep
-        
-        // Cleanup after 4 seconds
-        setTimeout(() => {
-            stack1.classList.remove('counting-mode');
-            stack2.classList.remove('counting-mode');
-            
-            const calc1 = $(`calc-class-${c1}`);
-            const calc2 = $(`calc-class-${c2}`);
-            if (calc1) calc1.remove();
-            if (calc2) calc2.remove();
-            
-            comparison.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => {
-                if (comparison && comparison.parentNode) {
-                    comparison.parentNode.removeChild(comparison);
-                }
-            }, 500);
-        }, 4000);
-        
+        const calc1 = $(`calc-class-${c1}`);
+        const calc2 = $(`calc-class-${c2}`);
+        if (calc1) calc1.remove();
+        if (calc2) calc2.remove();
+        // Inline feedback will show in answer-insight div
     }, comparisonTime);
 }
 
@@ -1030,13 +991,13 @@ function animateDifference(classes) {
             
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, delayMs + (index * 1200));
+        }, delayMs + (index * 150));
     });
     
     // Show calculation for larger class
-    const calcTimeLarger = delayMs + (ballCountLarger * 1200) + 500;
+    const calcTimeLarger = delayMs + (ballCountLarger * 150) + 100;
     setTimeout(() => {
         const label = stackLarger.querySelector('.counting-label-overlay');
         if (label) label.remove();
@@ -1051,7 +1012,7 @@ function animateDifference(classes) {
     }, calcTimeLarger);
     
     // ─── Animate Smaller Class (after larger class) ───
-    const startSecondClass = calcTimeLarger + 1500;
+    const startSecondClass = calcTimeLarger + 300;
     
     stackSmaller.classList.add('counting-mode');
     const footballsSmaller = Array.from(stackSmaller.querySelectorAll('.football-icon'));
@@ -1073,13 +1034,13 @@ function animateDifference(classes) {
             
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, startSecondClass + (index * 1200));
+        }, startSecondClass + (index * 150));
     });
     
     // Show calculation for smaller class
-    const calcTimeSmaller = startSecondClass + (ballCountSmaller * 1200) + 500;
+    const calcTimeSmaller = startSecondClass + (ballCountSmaller * 150) + 100;
     setTimeout(() => {
         const label = stackSmaller.querySelector('.counting-label-overlay');
         if (label) label.remove();
@@ -1093,83 +1054,17 @@ function animateDifference(classes) {
         playTone(784, 0.3, 'sine', 0.14);
     }, calcTimeSmaller);
     
-    // ─── Show Subtraction Result ───
+    // ─── Clean up after animation ───
     const subtractionTime = calcTimeSmaller + 1500;
     setTimeout(() => {
-        const subtraction = document.createElement('div');
-        subtraction.className = 'subtraction-overlay';
-        subtraction.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
-            border: 4px solid #4db8ff;
-            border-radius: 20px;
-            padding: 40px 45px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.4), inset 0 0 30px rgba(77,184,255,0.1);
-            animation: popIn 0.5s ease-out;
-            max-width: 520px;
-            min-width: 450px;
-        `;
+        stackLarger.classList.remove('counting-mode');
+        stackSmaller.classList.remove('counting-mode');
         
-        subtraction.innerHTML = `
-            <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #4db8ff;">
-                🧮 SUBTRACTION RESULT 🧮
-            </div>
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #4db8ff, transparent); margin-bottom: 28px;"></div>
-            
-            <div style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 28px;">
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 6px;">${countLarger}</div>
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 600;">Class ${largerClass}</div>
-                </div>
-                
-                <div style="font-size: 32px; color: #4db8ff; font-weight: 700;">−</div>
-                
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 6px;">${countSmaller}</div>
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 600;">Class ${smallerClass}</div>
-                </div>
-                
-                <div style="font-size: 32px; color: #4db8ff; font-weight: 700;">=</div>
-                
-                <div style="text-align: center; background: rgba(255,193,7,0.2); padding: 16px 20px; border-radius: 12px; border: 2px solid var(--star-gold);">
-                    <div style="font-size: 36px; font-weight: 700; color: var(--star-gold);">${difference}</div>
-                    <div style="font-size: 12px; color: var(--star-gold); font-weight: 600; margin-top: 4px;">difference</div>
-                </div>
-            </div>
-            
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #4db8ff, transparent); margin-bottom: 20px;"></div>
-            
-            <div style="font-size: 18px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success); animation: pulse 1s infinite;">
-                ✅ Class ${largerClass} has ${difference} more student${difference !== 1 ? 's' : ''}!
-            </div>
-        `;
-        
-        document.body.appendChild(subtraction);
-        playTone(880, 0.4, 'sine', 0.15); // Success beep
-        
-        // Cleanup after 5 seconds
-        setTimeout(() => {
-            stackLarger.classList.remove('counting-mode');
-            stackSmaller.classList.remove('counting-mode');
-            
-            const calcLarger = $(`calc-class-${largerClass}`);
-            const calcSmaller = $(`calc-class-${smallerClass}`);
-            if (calcLarger) calcLarger.remove();
-            if (calcSmaller) calcSmaller.remove();
-            
-            subtraction.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => {
-                if (subtraction && subtraction.parentNode) {
-                    subtraction.parentNode.removeChild(subtraction);
-                }
-            }, 500);
-        }, 5000);
-        
+        const calcLarger = $(`calc-class-${largerClass}`);
+        const calcSmaller = $(`calc-class-${smallerClass}`);
+        if (calcLarger) calcLarger.remove();
+        if (calcSmaller) calcSmaller.remove();
+        // Inline feedback will show in answer-insight div
     }, subtractionTime);
 }
 
@@ -1219,13 +1114,13 @@ function animateTotalCount(allClasses) {
                 
                 setTimeout(() => {
                     football.classList.remove('counting-active');
-                }, 800);
+                }, 200);
                 
-            }, cumulativeDelay + (fIdx * 1200));
+            }, cumulativeDelay + (fIdx * 150));
         });
         
         // Show calculation for this class
-        const calcTime = cumulativeDelay + (ballCount * 1200) + 500;
+        const calcTime = cumulativeDelay + (ballCount * 150) + 100;
         setTimeout(() => {
             const label = stack.querySelector('.counting-label-overlay');
             if (label) label.remove();
@@ -1240,7 +1135,7 @@ function animateTotalCount(allClasses) {
         }, calcTime);
         
         // Update delay for next class
-        cumulativeDelay = calcTime + 1200;
+        cumulativeDelay = calcTime + 200;
     });
     
     // Show final sum result
@@ -1253,69 +1148,7 @@ function animateTotalCount(allClasses) {
             const stack = $(`stack-${cls}`);
             if (stack) stack.classList.remove('counting-mode');
         });
-        
-        const sumOverlay = document.createElement('div');
-        sumOverlay.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
-            border: 4px solid #66bb6a;
-            border-radius: 20px;
-            padding: 40px 45px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.4), inset 0 0 30px rgba(102,187,106,0.1);
-            animation: popIn 0.5s ease-out;
-            max-width: 500px;
-        `;
-        
-        const classesStr = allClasses.join(' + ');
-        const classCounts = allClasses.map(c => STATE.dataset[c]).join(' + ');
-        
-        sumOverlay.innerHTML = `
-            <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #66bb6a;">
-                ➕ TOTAL SUM ➕
-            </div>
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #66bb6a, transparent); margin-bottom: 25px;"></div>
-            
-            <div style="font-size: 16px; color: rgba(255,255,255,0.9); margin-bottom: 20px; font-weight: 600;">
-                All Classes Added Together:
-            </div>
-            
-            <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 28px; flex-wrap: wrap;">
-                <div style="font-size: 18px; font-weight: 700; color: #fff;">${classCounts}</div>
-            </div>
-            
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #66bb6a, transparent); margin-bottom: 25px;"></div>
-            
-            <div style="font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 6px;">
-                Total:
-            </div>
-            <div style="font-size: 48px; font-weight: 700; color: #66bb6a; margin-bottom: 12px; padding: 20px; background: rgba(102,187,106,0.15); border-radius: 12px; border: 2px solid #66bb6a;">
-                ${totalCount}
-            </div>
-            <div style="font-size: 14px; color: rgba(255,255,255,0.7); font-weight: 600;">students</div>
-            
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #66bb6a, transparent); margin-top: 25px; margin-bottom: 20px;"></div>
-            
-            <div style="font-size: 18px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success); animation: pulse 1s infinite;">
-                ✅ Sum of all 5 classes: ${totalCount} students!
-            </div>
-        `;
-        
-        document.body.appendChild(sumOverlay);
-        playTone(880, 0.4, 'sine', 0.15);
-        
-        setTimeout(() => {
-            sumOverlay.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => {
-                if (sumOverlay && sumOverlay.parentNode) {
-                    sumOverlay.parentNode.removeChild(sumOverlay);
-                }
-            }, 500);
-        }, 5000);
+        // Inline feedback will show in answer-insight div
     }, finalTime);
 }
 
@@ -1345,9 +1178,9 @@ function animateSymbolLogic(cls, symbolCount, studentCount) {
             
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, delayMs + (index * 1200));
+        }, delayMs + (index * 150));
     });
     
     // Show multiplication result
@@ -1358,70 +1191,9 @@ function animateSymbolLogic(cls, symbolCount, studentCount) {
         const label = stack.querySelector('.counting-label-overlay');
         if (label) label.remove();
         
-        const resultOverlay = document.createElement('div');
-        resultOverlay.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
-            border: 4px solid var(--star-gold);
-            border-radius: 20px;
-            padding: 40px 45px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.4), inset 0 0 30px rgba(255,193,7,0.1);
-            animation: popIn 0.5s ease-out;
-            max-width: 500px;
-        `;
-        
-        resultOverlay.innerHTML = `
-            <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--star-gold);">
-                🧮 SYMBOL CALCULATION 🧮
-            </div>
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, var(--star-gold), transparent); margin-bottom: 28px;"></div>
-            
-            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 28px;">
-                <div style="text-align: center;">
-                    <div style="font-size: 40px; font-weight: 700; color: #fff; margin-bottom: 8px;">${symbolCount}</div>
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 600;">⚽ Footballs</div>
-                </div>
-                
-                <div style="font-size: 36px; color: var(--star-gold); font-weight: 700;">×</div>
-                
-                <div style="text-align: center;">
-                    <div style="font-size: 40px; font-weight: 700; color: #fff; margin-bottom: 8px;">${perSymbol}</div>
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 600;">per Football</div>
-                </div>
-                
-                <div style="font-size: 36px; color: var(--star-gold); font-weight: 700;">=</div>
-                
-                <div style="text-align: center; background: rgba(255,193,7,0.2); padding: 16px 20px; border-radius: 12px; border: 2px solid var(--star-gold);">
-                    <div style="font-size: 40px; font-weight: 700; color: var(--star-gold);">${studentCount}</div>
-                    <div style="font-size: 12px; color: var(--star-gold); font-weight: 600; margin-top: 4px;">students</div>
-                </div>
-            </div>
-            
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, var(--star-gold), transparent); margin-bottom: 20px;"></div>
-            
-            <div style="font-size: 18px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success); animation: pulse 1s infinite;">
-                ✅ Class ${cls} represents ${studentCount} students!
-            </div>
-        `;
-        
-        document.body.appendChild(resultOverlay);
-        playTone(880, 0.4, 'sine', 0.15);
-        
-        setTimeout(() => {
-            stack.classList.remove('counting-mode');
-            resultOverlay.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => {
-                if (resultOverlay && resultOverlay.parentNode) {
-                    resultOverlay.parentNode.removeChild(resultOverlay);
-                }
-            }, 500);
-        }, 4000);
-    }, delayMs + (symbolCount * 1200) + 500);
+        // Inline feedback will show in answer-insight div
+        stack.classList.remove('counting-mode');
+    }, delayMs + (symbolCount * 150) + 2000);
 }
 
 // ─── ANIMATE MEAN VALUE (AVERAGE ACROSS 5 CLASSES) ───────────────────────────
@@ -1468,13 +1240,13 @@ function animateMeanValue(allClasses, totalStudents, meanValue) {
                 
                 setTimeout(() => {
                     football.classList.remove('counting-active');
-                }, 800);
+                }, 200);
                 
-            }, cumulativeDelay + (fIdx * 1200));
+            }, cumulativeDelay + (fIdx * 150));
         });
         
         // Show calculation for this class
-        const calcTime = cumulativeDelay + (ballCount * 1200) + 500;
+        const calcTime = cumulativeDelay + (ballCount * 150) + 100;
         setTimeout(() => {
             const label = stack.querySelector('.counting-label-overlay');
             if (label) label.remove();
@@ -1489,7 +1261,7 @@ function animateMeanValue(allClasses, totalStudents, meanValue) {
         }, calcTime);
         
         // Update delay for next class
-        cumulativeDelay = calcTime + 1200;
+        cumulativeDelay = calcTime + 200;
     });
     
     // Show final average result
@@ -1502,76 +1274,7 @@ function animateMeanValue(allClasses, totalStudents, meanValue) {
             const stack = $(`stack-${cls}`);
             if (stack) stack.classList.remove('counting-mode');
         });
-        
-        const meanOverlay = document.createElement('div');
-        meanOverlay.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
-            border: 4px solid #7c4dff;
-            border-radius: 20px;
-            padding: 40px 45px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.4), inset 0 0 30px rgba(124,77,255,0.1);
-            animation: popIn 0.5s ease-out;
-            max-width: 550px;
-        `;
-        
-        meanOverlay.innerHTML = `
-            <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #7c4dff;">
-                📊 AVERAGE (MEAN) CALCULATION 📊
-            </div>
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #7c4dff, transparent); margin-bottom: 25px;"></div>
-            
-            <div style="font-size: 16px; color: rgba(255,255,255,0.9); margin-bottom: 12px; font-weight: 600;">
-                Total of all 5 classes:
-            </div>
-            <div style="font-size: 24px; font-weight: 700; color: #fff; margin-bottom: 20px;">
-                ${totalStudents} students
-            </div>
-            
-            <div style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 28px;">
-                <div style="text-align: center;">
-                    <div style="font-size: 36px; font-weight: 700; color: #fff; margin-bottom: 6px;">${totalStudents}</div>
-                    <div style="font-size: 12px; color: rgba(255,255,255,0.7); font-weight: 600;">total students</div>
-                </div>
-                
-                <div style="font-size: 32px; color: #7c4dff; font-weight: 700;">÷</div>
-                
-                <div style="text-align: center;">
-                    <div style="font-size: 36px; font-weight: 700; color: #fff; margin-bottom: 6px;">5</div>
-                    <div style="font-size: 12px; color: rgba(255,255,255,0.7); font-weight: 600;">classes</div>
-                </div>
-                
-                <div style="font-size: 32px; color: #7c4dff; font-weight: 700;">=</div>
-                
-                <div style="text-align: center; background: rgba(124,77,255,0.2); padding: 16px 20px; border-radius: 12px; border: 2px solid #7c4dff;">
-                    <div style="font-size: 36px; font-weight: 700; color: #7c4dff;">${meanValue}</div>
-                    <div style="font-size: 12px; color: #7c4dff; font-weight: 600; margin-top: 4px;">average</div>
-                </div>
-            </div>
-            
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #7c4dff, transparent); margin-bottom: 20px;"></div>
-            
-            <div style="font-size: 18px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success); animation: pulse 1s infinite;">
-                ✅ Average across all 5 classes: ${meanValue} students!
-            </div>
-        `;
-        
-        document.body.appendChild(meanOverlay);
-        playTone(880, 0.4, 'sine', 0.15);
-        
-        setTimeout(() => {
-            meanOverlay.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => {
-                if (meanOverlay && meanOverlay.parentNode) {
-                    meanOverlay.parentNode.removeChild(meanOverlay);
-                }
-            }, 500);
-        }, 5000);
+        // Inline feedback will show in answer-insight div
     }, finalTime);
 }
 
@@ -1604,88 +1307,19 @@ function animateMissingSymbol(cls, studentCount, footballsNeeded) {
             
             setTimeout(() => {
                 football.classList.remove('counting-active');
-            }, 800);
+            }, 200);
             
-        }, delayMs + (index * 1200));
+        }, delayMs + (index * 150));
     });
     
-    // Show division result
+    // Show division result  
     setTimeout(() => {
         const label = stack.querySelector('.counting-label-overlay');
         if (label) label.remove();
         
         stack.classList.remove('counting-mode');
-        
-        const divisionOverlay = document.createElement('div');
-        divisionOverlay.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
-            border: 4px solid #ff7043;
-            border-radius: 20px;
-            padding: 40px 45px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.4), inset 0 0 30px rgba(255,112,67,0.1);
-            animation: popIn 0.5s ease-out;
-            max-width: 500px;
-        `;
-        
-        const remainder = studentCount % perSymbol;
-        let halfText = '';
-        if (remainder > 0) {
-            halfText = `<div style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px; font-weight: 600;">(${remainder} student${remainder !== 1 ? 's' : ''} = ½ football)</div>`;
-        }
-        
-        divisionOverlay.innerHTML = `
-            <div style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #ff7043;">
-                ➗ DIVISION CALCULATION ➗
-            </div>
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #ff7043, transparent); margin-bottom: 28px;"></div>
-            
-            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 28px;">
-                <div style="text-align: center;">
-                    <div style="font-size: 40px; font-weight: 700; color: #fff; margin-bottom: 8px;">${studentCount}</div>
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 600;">students</div>
-                </div>
-                
-                <div style="font-size: 36px; color: #ff7043; font-weight: 700;">÷</div>
-                
-                <div style="text-align: center;">
-                    <div style="font-size: 40px; font-weight: 700; color: #fff; margin-bottom: 8px;">${perSymbol}</div>
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 600;">per football</div>
-                </div>
-                
-                <div style="font-size: 36px; color: #ff7043; font-weight: 700;">=</div>
-                
-                <div style="text-align: center; background: rgba(255,112,67,0.2); padding: 16px 20px; border-radius: 12px; border: 2px solid #ff7043;">
-                    <div style="font-size: 40px; font-weight: 700; color: #ff7043;">${footballsNeeded}</div>
-                    <div style="font-size: 12px; color: #ff7043; font-weight: 600; margin-top: 4px;">⚽ footballs</div>
-                    ${halfText}
-                </div>
-            </div>
-            
-            <div style="height: 2px; background: linear-gradient(90deg, transparent, #ff7043, transparent); margin-bottom: 20px;"></div>
-            
-            <div style="font-size: 18px; font-weight: 700; color: var(--success); padding: 16px 20px; background: rgba(46, 125, 50, 0.2); border-radius: 12px; border-left: 4px solid var(--success); animation: pulse 1s infinite;">
-                ✅ Class ${cls} needs ${footballsNeeded} football${footballsNeeded !== 1 ? 's' : ''}!
-            </div>
-        `;
-        
-        document.body.appendChild(divisionOverlay);
-        playTone(880, 0.4, 'sine', 0.15);
-        
-        setTimeout(() => {
-            divisionOverlay.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => {
-                if (divisionOverlay && divisionOverlay.parentNode) {
-                    divisionOverlay.parentNode.removeChild(divisionOverlay);
-                }
-            }, 500);
-        }, 4000);
-    }, delayMs + (footballsNeeded * 1200) + 500);
+        // Inline feedback will show in answer-insight div
+    }, delayMs + (footballsNeeded * 150) + 2000);
 }
 
 function resetHelper() {
@@ -1696,6 +1330,158 @@ function resetHelper() {
             <p class="helper-tip">${STATE.phase === 'build' ? 'Build your pictograph first!' : 'Answer the questions!'}</p>
         </div>
     `;
+}
+
+function showAnswerInsight(question) {
+    const insightEl = $('answer-insight');
+    const lvl = LEVELS[(STATE.currentLevel - 1) % LEVELS.length];
+    const perSymbol = lvl.perSymbol;
+    
+    let insight = '';
+    
+    if (question.type === 'Comparison') {
+        const [c1, c2] = question.comparisonClasses;
+        const count1 = STATE.dataset[c1];
+        const count2 = STATE.dataset[c2];
+        const result = count1 > count2 ? c1 : (count2 > count1 ? c2 : 'equal');
+        const diff = Math.abs(count1 - count2);
+        
+        insight = `
+            <div style="font-weight: 700; color: #d32f2f; margin-bottom: 10px;">📋 Question: Which class has MORE students?</div>
+            <div style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem;">
+                <strong>Class ${c1}:</strong> ${count1} students 🏃 <br/>
+                <strong>Class ${c2}:</strong> ${count2} students 🏃
+            </div>
+            <div style="background: rgba(46,125,50,0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 4px solid var(--success);">
+                <strong>✅ Correct Answer: Class ${result}</strong> <br/>
+                ${result === 'equal' ? `Both classes have exactly <strong>${count1}</strong> students - EQUAL!` : `Class ${result} has <strong>${diff}</strong> more student${diff !== 1 ? 's' : ''} than Class ${result === c1 ? c2 : c1}`}
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.5;">
+                <strong>💡 How to solve:</strong> <br/>
+                1️⃣ Count the footballs for each class<br/>
+                2️⃣ Compare which class has MORE footballs<br/>
+                3️⃣ The class with more footballs has more students!
+            </div>
+        `;
+    } 
+    else if (question.type === 'Difference') {
+        const [d1, d2] = question.differenceClasses;
+        const count1 = STATE.dataset[d1];
+        const count2 = STATE.dataset[d2];
+        const larger = Math.max(count1, count2);
+        const smaller = Math.min(count1, count2);
+        const diff = larger - smaller;
+        
+        insight = `
+            <div style="font-weight: 700; color: #d32f2f; margin-bottom: 10px;">📋 Question: What is the DIFFERENCE between the classes?</div>
+            <div style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem;">
+                <strong>Class ${d1}:</strong> ${count1} students 🏃 <br/>
+                <strong>Class ${d2}:</strong> ${count2} students 🏃
+            </div>
+            <div style="background: rgba(46,125,50,0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 4px solid var(--success);">
+                <strong>✅ Correct Answer: ${diff} students</strong>
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.5;">
+                <strong>💡 How to solve:</strong> <br/>
+                1️⃣ Find the LARGER number: <strong>${larger}</strong><br/>
+                2️⃣ Find the SMALLER number: <strong>${smaller}</strong><br/>
+                3️⃣ Subtract: ${larger} − ${smaller} = <strong>${diff}</strong>
+            </div>
+        `;
+    }
+    else if (question.type === 'Total Count') {
+        let total = 0;
+        question.allClasses.forEach(cls => { total += STATE.dataset[cls]; });
+        const counts = question.allClasses.map(c => STATE.dataset[c]);
+        
+        insight = `
+            <div style="font-weight: 700; color: #d32f2f; margin-bottom: 10px;">📋 Question: How many students in ALL classes?</div>
+            <div style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem;">
+                <strong>All Classes Combined:</strong><br/>
+                ${question.allClasses.map((c, i) => `Class ${c}: <strong>${counts[i]}</strong> students`).join(' 🤝 ')}
+            </div>
+            <div style="background: rgba(46,125,50,0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 4px solid var(--success);">
+                <strong>✅ Correct Answer: ${total} students</strong>
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.5;">
+                <strong>💡 How to solve:</strong> <br/>
+                ADD all the numbers together:<br/>
+                ${counts.join(' + ')} = <strong>${total}</strong>
+            </div>
+        `;
+    }
+    else if (question.type === 'Symbol Logic') {
+        const cls = question.explainClass;
+        const count = STATE.dataset[cls];
+        const balls = Math.ceil(count / perSymbol);
+        
+        insight = `
+            <div style="font-weight: 700; color: #d32f2f; margin-bottom: 10px;">📋 Question: How many students does Class ${cls} represent?</div>
+            <div style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem;">
+                <strong>Rule:</strong> Each ⚽ football = <strong>${perSymbol} students</strong><br/>
+                <strong>Class ${cls} has:</strong> <strong>${balls}</strong> footballs
+            </div>
+            <div style="background: rgba(46,125,50,0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 4px solid var(--success);">
+                <strong>✅ Correct Answer: ${count} students</strong>
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.5;">
+                <strong>💡 How to solve:</strong> <br/>
+                1️⃣ Count the ⚽ footballs: <strong>${balls}</strong><br/>
+                2️⃣ Multiply by ${perSymbol} (students per football)<br/>
+                3️⃣ ${balls} × ${perSymbol} = <strong>${count}</strong> students
+            </div>
+        `;
+    }
+    else if (question.type === 'Mean Value') {
+        let total = 0;
+        question.allClasses.forEach(cls => { total += STATE.dataset[cls]; });
+        const mean = Math.round(total / question.allClasses.length);
+        
+        insight = `
+            <div style="font-weight: 700; color: #d32f2f; margin-bottom: 10px;">📋 Question: What is the AVERAGE (mean) across all classes?</div>
+            <div style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem;">
+                <strong>All 5 Classes:</strong> ${question.allClasses.map(c => STATE.dataset[c]).join(', ')} students
+            </div>
+            <div style="background: rgba(46,125,50,0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 4px solid var(--success);">
+                <strong>✅ Correct Answer: ${mean} students</strong>
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.5;">
+                <strong>💡 How to solve (Average = Total ÷ Count):</strong> <br/>
+                1️⃣ Add all numbers: ${question.allClasses.map(c => STATE.dataset[c]).join(' + ')} = <strong>${total}</strong><br/>
+                2️⃣ Count how many classes: <strong>5 classes</strong><br/>
+                3️⃣ Divide: ${total} ÷ 5 = <strong>${mean}</strong> average
+            </div>
+        `;
+    }
+    else if (question.type === 'Missing Symbol') {
+        const cls = question.explainClass;
+        const count = STATE.dataset[cls];
+        const footballs = Math.floor(count / perSymbol);
+        const remainder = count % perSymbol;
+        
+        insight = `
+            <div style="font-weight: 700; color: #d32f2f; margin-bottom: 10px;">📋 Question: How many footballs does Class ${cls} need?</div>
+            <div style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem;">
+                <strong>Class ${cls} has:</strong> <strong>${count}</strong> students<br/>
+                <strong>Rule:</strong> Each ⚽ = ${perSymbol} students
+            </div>
+            <div style="background: rgba(46,125,50,0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 4px solid var(--success);">
+                <strong>✅ Correct Answer: ${footballs} football${footballs !== 1 ? 's' : ''}${remainder > 0 ? ` + 1 half football ◐` : ''}</strong>
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.5;">
+                <strong>💡 How to solve (Division):</strong> <br/>
+                1️⃣ Total students: <strong>${count}</strong><br/>
+                2️⃣ Divide by ${perSymbol}: ${count} ÷ ${perSymbol} = <strong>${footballs}</strong>${remainder > 0 ? ` remainder ${remainder}` : ''}<br/>
+                ${remainder > 0 ? `3️⃣ The remainder <strong>${remainder}</strong> means we need 1 <strong>half football ◐</strong> for those students!` : ''}
+            </div>
+        `;
+    }
+    
+    if (insight) {
+        insightEl.innerHTML = insight;
+        insightEl.className = 'answer-insight show';
+        insightEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
 // ─── RETRY / NEXT ───────────────────────────────────────────────────────────
@@ -1712,9 +1498,22 @@ function nextQuestion() {
 function nextLevel() {
     sfxClick();
     hide('level-complete-modal');
+    if (STATE.levelCompleteTimer) {
+        clearTimeout(STATE.levelCompleteTimer);
+        STATE.levelCompleteTimer = null;
+    }
+
+    if (STATE.currentLevel >= LEVELS.length) {
+        showFinalStatsModal();
+        return;
+    }
+
+    const completedLabel = LEVELS[(STATE.currentLevel - 1) % LEVELS.length].label;
     STATE.currentLevel++;
+    const nextLabel = LEVELS[(STATE.currentLevel - 1) % LEVELS.length].label;
     loadLevel(STATE.currentLevel);
     sfxLevelUp();
+    showLevelTransitionPopup(`✅ ${completedLabel} level completed! Build the ${nextLabel} pictograph now.`);
 }
 
 // ─── STARS ──────────────────────────────────────────────────────────────────
@@ -1746,7 +1545,10 @@ function showLevelComplete() {
     if (STATE.levelMistakes > 0) lcStars = 2;
     if (STATE.levelMistakes > 2) lcStars = 1;
 
-    $('lc-title').textContent = `Level ${STATE.currentLevel} Complete!`;
+    const isFinalLevel = STATE.currentLevel >= LEVELS.length;
+    $('lc-title').textContent = isFinalLevel
+        ? `🎉 Hard Level Complete! Game Finished!`
+        : `Level ${STATE.currentLevel} Complete!`;
 
     const starsDiv = $('lc-stars');
     starsDiv.innerHTML = '';
@@ -1761,10 +1563,25 @@ function showLevelComplete() {
     $('lc-score').textContent = STATE.levelScore;
     $('lc-stars-count').textContent = `${lcStars} / 3`;
     $('lc-mistakes').textContent = STATE.levelMistakes;
+    STATE.levelStars[STATE.currentLevel] = lcStars;
+
+    const nextBtn = $('lc-next-btn');
+    if (nextBtn) {
+        nextBtn.textContent = isFinalLevel ? '🏁 Finish Game' : '🚀 Play Next Level';
+    }
 
     show('level-complete-modal');
     launchConfetti();
     sfxLevelUp();
+}
+
+function showFinalStatsModal() {
+    const totalStars = Object.values(STATE.levelStars).reduce((sum, stars) => sum + stars, 0);
+    $('final-score').textContent = STATE.score;
+    $('final-stars').textContent = `${totalStars} / ${LEVELS.length * 3}`;
+    $('final-mistakes').textContent = STATE.totalMistakes;
+    show('final-stats-modal');
+    launchConfetti();
 }
 
 // ─── BADGE POPUP ────────────────────────────────────────────────────────────
@@ -1782,6 +1599,17 @@ function showBadgePopup(text) {
     el.style.whiteSpace = 'nowrap';
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 2000);
+}
+
+function showLevelTransitionPopup(text) {
+    const existing = document.querySelector('.level-transition-toast');
+    if (existing) existing.remove();
+
+    const el = document.createElement('div');
+    el.className = 'level-transition-toast';
+    el.textContent = text;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 5000);
 }
 
 // ─── EYE CANDY / EFFECTS ───────────────────────────────────────────────────
